@@ -4,13 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowUp, Brain, ChevronDown, ImagePlus, ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useNavigate } from "react-router-dom";
-
-type Msg = { role: "user" | "assistant"; content: string };
-
-const fakeResponses = [
-  "That's a great question! Let me break it down for you...\n\nThe key concept here involves understanding the fundamental principles. Think of it like building blocks — each piece connects to form the larger picture.\n\n**Key Points:**\n1. Start with the basics\n2. Build understanding step by step\n3. Practice regularly\n\nWould you like me to explain any part in more detail?",
-  "Here's a clear explanation:\n\nThis topic can be understood through a simple analogy. Imagine you're solving a puzzle — each piece represents a concept that fits together.\n\n**Remember:**\n- Break complex problems into smaller parts\n- Look for patterns\n- Don't hesitate to ask follow-up questions!\n\nLet me know if you need more examples! 📚",
-];
+import { streamChat, type Msg } from "@/lib/streamChat";
+import { toast } from "@/hooks/use-toast";
 
 const AskAI = ({ subjectFilter }: { subjectFilter?: string }) => {
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -23,30 +18,41 @@ const AskAI = ({ subjectFilter }: { subjectFilter?: string }) => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  const send = () => {
-    if (!input.trim()) return;
+  const send = async () => {
+    if (!input.trim() || isTyping) return;
     const userMsg: Msg = { role: "user", content: input };
-    setMessages((p) => [...p, userMsg]);
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setInput("");
     setIsTyping(true);
 
-    const response = fakeResponses[messages.length % fakeResponses.length];
-    let idx = 0;
-    const assistantMsg: Msg = { role: "assistant", content: "" };
-    setMessages((p) => [...p, assistantMsg]);
-
-    const interval = setInterval(() => {
-      idx += 3;
-      setMessages((p) => {
-        const copy = [...p];
-        copy[copy.length - 1] = { role: "assistant", content: response.slice(0, idx) };
-        return copy;
+    let assistantSoFar = "";
+    const upsertAssistant = (chunk: string) => {
+      assistantSoFar += chunk;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant") {
+          return prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: assistantSoFar } : m));
+        }
+        return [...prev, { role: "assistant", content: assistantSoFar }];
       });
-      if (idx >= response.length) {
-        clearInterval(interval);
-        setIsTyping(false);
-      }
-    }, 20);
+    };
+
+    try {
+      await streamChat({
+        messages: newMessages,
+        subjectFilter,
+        onDelta: upsertAssistant,
+        onDone: () => setIsTyping(false),
+        onError: (err) => {
+          setIsTyping(false);
+          toast({ title: "Error", description: err, variant: "destructive" });
+        },
+      });
+    } catch {
+      setIsTyping(false);
+      toast({ title: "Error", description: "Failed to connect to AI", variant: "destructive" });
+    }
   };
 
   return (
@@ -176,7 +182,7 @@ const AskAI = ({ subjectFilter }: { subjectFilter?: string }) => {
                 <motion.button
                   whileTap={{ scale: 0.85 }}
                   onClick={send}
-                  disabled={!input.trim()}
+                  disabled={!input.trim() || isTyping}
                   className="w-9 h-9 rounded-full bg-[hsl(var(--primary))] flex items-center justify-center disabled:opacity-40 shadow-md"
                 >
                   <ArrowUp size={16} className="text-primary-foreground" />
